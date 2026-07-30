@@ -1,0 +1,86 @@
+# REAL working external HAProxy from the lab (Arch Linux host ext-lb01, HAProxy
+# 3.x). This is the reference the generator and the adversarial verify stage
+# check against. LB IP 10.10.50.133, single-tenant access.lab.vmguru.io.
+#
+# Topology: SSL bridging / re-encryption. The frontend terminates the REAL cert
+# (omnissa-access.pem, cert+key concatenated in ONE file) and the backend
+# re-encrypts to the access nodes on 443, which present a self-signed cert --
+# hence access-profile.yml is_self_signed: true and the backend uses
+# `ssl verify none`.
+#
+# What this confirms and adds vs. earlier notes:
+#   - modern http-check syntax (favicon.ico + Host header) -- confirmed
+#   - Host header forced to <tenant>.<domain> in the BACKEND -- confirmed
+#   - option forwardfor -- confirmed
+#   - generous timeouts, tunnel 1h -- confirmed
+#   - `ssl verify none` on the backend (self-signed appliance) -- confirmed the
+#     finding that was only DERIVED before
+#   - NEW: source-IP stickiness (stick-table / stick on src) instead of cookie
+#     insertion, so the app's session cookies pass through untouched
+#   - NO stream frontends for 27443/25262: basic web access needs only 80/443;
+#     the stream ports are feature-specific (tunnel/Hub/mobile)
+#   - distro is Arch (no SELinux); the SELinux/reset-failed notes apply to the
+#     AlmaLinux managed-appliance path (LB mode B), not here
+
+global
+    log         /dev/log local0
+    log         /dev/log local1 notice
+    maxconn     20000
+    daemon
+    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    tune.ssl.default-dh-param 2048
+
+defaults
+    log         global
+    mode        http
+    option      httplog
+    option      dontlognull
+    option      redispatch
+    retries     3
+    timeout connect         10s
+    timeout client          15m
+    timeout server          15m
+    timeout tunnel          1h
+    timeout http-keep-alive 10s
+    timeout http-request    15s
+    timeout queue           1m
+    timeout check           5s
+
+frontend fe_http_redirect
+    bind        10.10.50.133:80
+    mode        http
+    http-request redirect scheme https code 301
+
+frontend fe_access_https
+    bind        10.10.50.133:443 ssl crt /etc/haproxy/certs/omnissa-access.pem
+    mode        http
+    option forwardfor
+    http-request set-header X-Forwarded-Proto https
+    http-request set-header X-Forwarded-Port 443
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    default_backend be_access_nodes
+
+backend be_access_nodes
+    mode        http
+    balance     roundrobin
+    # Source affinity instead of cookie insertion, so HAProxy leaves the app's
+    # session cookies untouched.
+    stick-table type ip size 200k expire 60m
+    stick       on src
+    http-request set-header Host access.lab.vmguru.io
+    option      httpchk
+    http-check  send meth GET uri /favicon.ico hdr Host access.lab.vmguru.io
+    http-check  expect status 200
+    default-server ssl verify none check inter 5s fall 3 rise 2
+    server access-node-1 10.10.50.11:443
+    server access-node-2 10.10.50.12:443
+
+frontend fe_stats
+    bind        127.0.0.1:8404
+    mode        http
+    stats       enable
+    stats       uri /
+    stats       refresh 10s
+    stats       admin if TRUE

@@ -1,0 +1,261 @@
+# ws1access -- deployment configuration
+#
+# Written by `ws1access configure`. Safe to keep in version control or hand to a
+# colleague: it contains no secrets, only where each secret comes from.
+#
+# Anything derivable is NOT in this file. Node counts follow from cluster.size,
+# the XFF ignore list follows from the load balancer and access node IPs, and the
+# cp-cluster.ini role mapping follows from the node list. Asking twice is how the
+# two answers drift apart.
+
+version: 1
+
+cluster:
+  # Working directory on the bootstrap node: /root/<name>
+  name: cp-cluster
+
+  # Drives BOTH the OVA deployment option (VM sizing) and `wso access init -s`.
+  # One answer, two consumers -- never asked twice.
+  #   small  -> 2 access nodes, up to 300k users
+  #   medium -> 2 access nodes, up to 1M users
+  #   large  -> 3 access nodes, up to 1M users / 20k groups / 500 apps
+  size: small
+
+fqdn:
+  # THE DOMAIN ONLY -- not the full tenant URL. This is the single most common
+  # mistake. To reach the environment at access.lab.example.io you set
+  #   domain: lab.example.io
+  #   tenant: access
+  # Setting domain to access.lab.example.io would yield access.access.lab.example.io.
+  domain: lab.example.io
+  tenant: access
+
+  # Load balancer port. <tenant>.<domain> must resolve to loadbalancer.ip.
+  # Never 8443 -- that is the per-node administrative port.
+  port: 443
+
+credentials:
+  # Set once via OVF properties, identical on every node. Both have a hard
+  # minimum of 15 characters, taken from the OVA's own password(15..) type --
+  # enforced during the dialog, not discovered during the deploy.
+  #
+  # The configuser password expires 60 days after OVA deployment and must then
+  # be changed on every node. It is needed exactly once after deployment, for
+  # ssh-copy-id; from then on the cluster uses key authentication and the
+  # password is never written anywhere.
+  root_password_from: prompt          # prompt   (the ONLY supported value -- passwords are never read from the environment, see config.py)
+  configuser_password_from: prompt
+
+vcenter:
+  host: vc.lab.local
+  user: administrator@vsphere.local
+  # prompt   (the ONLY supported value -- passwords are never read from the environment, see config.py) -- the value itself is never stored here.
+  password_from: prompt
+  datacenter: DC1
+  # Target compute: a cluster, a resource pool, or a specific host.
+  compute: Cluster1
+  datastore: vsanDatastore
+  network: VM-Network
+  # Optional VM folder; created if absent.
+  folder: /DC1/vm/omnissa
+
+ova:
+  path: input/ova/Omnissa-Access-26.07.ova
+  # Selects src/ws1access/ova_profiles/<profile>.yml, which holds the OVF
+  # property keys and deployment option IDs. Preflight reads the actual OVA and
+  # warns if it disagrees with the profile, rather than failing 20 minutes into
+  # the deploy.
+  profile: "26.07"
+
+  # Disk provisioning for the deployed VMs -- the dialog offers this as a choice.
+  #   thin   -> ovftool --diskMode=thin;  allocates on demand, ~4 GB up front.
+  #             Fast to deploy; datastore must still be able to grow to 200 GB.
+  #   thick  -> ovftool --diskMode=thick; allocates the full 200 GB immediately.
+  #             Slower to deploy, but no surprise if the datastore fills later.
+  # A datastore that is nearly full can fail a thin deploy near 100% (a host 500
+  # on the final disk block); thick fails earlier and more clearly, or use thin
+  # on a datastore with real headroom.
+  disk_mode: thin
+
+assets:
+  # The Omnissa Asset Bundle (xxxxxx.zip). Uploaded to
+  # /root/<cluster.name>/assets/ and loaded with `wso configure`.
+  bundle: input/assets/asset-bundle.zip
+
+network:
+  # Applies to every node. Node IPs are validated against gateway + netmask;
+  # an address outside that subnet is rejected during the dialog, not during deploy.
+  netmask: 255.255.255.0
+  gateway: 10.0.0.1
+  # Written into the OVF properties as a space-separated string. Listed here as
+  # YAML so each entry can be validated and queried individually during preflight.
+  dns:
+    - 10.0.0.53
+    - 10.0.0.54
+
+  # Also a list -- the appliance accepts multiple search domains. The first entry
+  # forms each node's FQDN together with its hostname.
+  search_domains:
+    - lab.example.io
+
+  # OPTIONAL -- normally omitted entirely. The appliance defaults to
+  # 172.17.0.0/16 and that is fine unless it collides with your node subnet, in
+  # which case nodes would route past themselves. Preflight detects the overlap
+  # and only then asks for a value.
+  # docker_bridge_cidr: 172.18.0.1/16
+
+nodes:
+  # Always exactly 1, always exactly 8 vCPU regardless of cluster.size.
+  # Its IP must NOT appear in cp-cluster.ini -- validation there fails if it does.
+  bootstrap:
+    hostname: cp-bootstrap
+    ip: 10.0.0.10
+
+  # Always exactly 3. Host PostgreSQL, Redis, Kafka, OpenSearch.
+  # Spread across separate ESXi hosts for HA.
+  platform:
+    - {hostname: cp-infra-1, ip: 10.0.0.11}
+    - {hostname: cp-infra-2, ip: 10.0.0.12}
+    - {hostname: cp-infra-3, ip: 10.0.0.13}
+
+  # 2 for small/medium, 3 for large. The dialog asks for exactly as many as
+  # cluster.size requires.
+  access:
+    - {hostname: cp-access-1, ip: 10.0.0.21}
+    - {hostname: cp-access-2, ip: 10.0.0.22}
+
+loadbalancer:
+  # The tool NEVER configures the load balancer -- that is your own device
+  # (F5 / NSX ALB / HAProxy). It only verifies that <tenant>.<domain> resolves
+  # to it (phase 30). Set it up before deploying.
+  #
+  # mode -- where TLS terminates, which decides where the real certificate goes
+  #         and how the appliance is configured. This is the ONLY loadbalancer
+  #         key the tool reads.
+  #   termination  -- TLS ends at the LB; the real cert lives on the LB, the
+  #                   appliance presents its self-signed cert. access-profile.yml
+  #                   uses is_self_signed: true. (The lab topology.)
+  #   passthrough  -- the LB passes TLS straight through; the appliance holds the
+  #                   real cert (taken from your PFX). access-profile.yml uses a
+  #                   custom cert.
+  mode: termination
+
+  # = fqdn.ip in access-profile.yml. <tenant>.<domain> must resolve here;
+  # preflight checks this before anything is deployed.
+  ip: 10.0.0.5
+
+  # Public-facing ports per the port table. 80/443 are HTTP; 27443 and 25262 are
+  # nginx-stream and need TCP frontends, where Host header and X-Forwarded-For
+  # do not apply.
+  http_ports: [80, 443]
+  stream_ports: [27443, 25262]
+
+  # Access nodes (nginx) answer HTTP 444 when the Host header does not match,
+  # which makes health checks mark them DOWN. Forcing the header fixes that for
+  # a single tenant -- but would break a second tenant on the same cluster.
+  force_host_header: true
+
+  # Where TLS terminates -- decides WHERE the real certificate goes and how the
+  # access appliance is configured. All three are legitimate.
+  #   terminate  -- TLS ends at the LB; the real cert lives ONLY on the LB
+  #                 (HAProxy). access-profile.yml uses is_self_signed: true, and
+  #                 the HAProxy backend must use `ssl verify none` because the
+  #                 appliance presents a self-signed cert internally -- otherwise
+  #                 every access node health-checks as DOWN. (This is the topology
+  #                 used in the lab test.)
+  #   reencrypt  -- LB terminates with the real cert and re-encrypts to the
+  #                 appliance; the appliance also holds a cert.
+  #   passthrough -- LB passes TLS straight through (mode tcp); the appliance
+  #                 holds the real cert. access-profile.yml uses custom_cert.
+  #
+  # The SAN cross-check follows the cert: with `terminate` it validates the LB
+  # cert, otherwise the appliance cert. Either way something must cover
+  # <tenant>.<domain>.
+  tls_termination: terminate
+
+  # managed mode only:
+  # host: 10.0.0.5
+  # ssh_user: root
+
+# OPTIONAL. Any reverse proxy between the client and the access LB -- typically
+# Unified Access Gateway or F5 APM in the DMZ. Most deployments have none; leave
+# this empty (or omit it) in that case. The dialog asks once ("is there a reverse
+# proxy?") and only prompts for IPs if yes. Every proxy IP given here is added to
+# access-profile.yml's ip_ignore_list_for_xff_header; a missing one makes Omnissa
+# derive the authentication method wrongly.
+reverse_proxies: []
+# reverse_proxies:
+#   - 10.10.60.10        # e.g. UAG in the DMZ
+
+# ip_ignore_list_for_xff_header is DERIVED, never asked directly:
+#   loadbalancer.ip  +  all cluster nodes except bootstrap  +  every reverse_proxies entry.
+#
+# Omnissa reads X-Forwarded-For to find the real client IP by skipping the
+# ignored (trusted) IPs, so the list must contain every non-client hop in the
+# chain: the LB, any reverse proxies, and the cluster node IPs. These are all
+# static node IPs; including the platform nodes as well as the access nodes is a
+# harmless superset (internal RFC1918 IPs are never a real external client) and
+# satisfies the guide's stated requirement.
+#
+# The nomad subnet 172.26.64.0/20 is NOT included for a primary deployment: the
+# guide requires it ONLY in the disaster-recovery / secondary-cluster chapter,
+# and a primary deploy works without it. It is added automatically only when a DR
+# / secondary cluster is configured.
+
+certificates:
+  # Whatever you have. The tool normalises it into the shapes the consumers
+  # need: Omnissa wants cert and key as separate files, HAProxy wants them
+  # concatenated. Doing that by hand is where mistakes surface 40 minutes later.
+  #
+  # THE CERTIFICATE IS THE ANCHOR. The same fqdn.domain and fqdn.tenant validated
+  # here against the cert SANs are the exact values written into access-profile.yml
+  # when the access services are configured (phase 70). So the cert is not checked
+  # in isolation -- it cross-validates the tenant/domain, and those flow forward.
+  # Checking at preflight means phase 70 cannot produce a cert/FQDN mismatch.
+  #
+  # The dialog reads the SANs and PROPOSES tenant/domain from them rather than
+  # having the user type them: a wildcard *.lab.vmguru.io -> domain lab.vmguru.io;
+  # a SAN access.lab.vmguru.io -> tenant "access", domain "lab.vmguru.io". This
+  # kills the access.access.<domain> mistake at the root, because the values come
+  # from the cert, not from memory.
+  #
+  # Preflight validates: "<tenant>.<domain>" is covered by a cert SAN (exact or
+  # wildcard); cert not expired; key matches cert; and, when cert_proxy is on,
+  # "<tenant>-cert.<domain>" and "<tenant>-amsso.<domain>" are present too.
+  # With loadbalancer.tls_termination: terminate, this certificate is deployed
+  # to the LB (HAProxy) and the access appliance runs self-signed -- exactly the
+  # lab-test topology. With reencrypt/passthrough it goes into access-profile.yml
+  # as custom_cert. Same file, different destination.
+  fqdn:
+    source: input/certs/wildcard.pfx
+    # pfx | pem_pair | pem_combined
+    format: pfx
+    # pfx only -- never stored, used once during preflight conversion.
+    password_from: prompt
+    # pem_pair only:
+    # key: input/certs/wildcard.key
+
+  # Required only for certificate-based authentication. When enabled, a SECOND
+  # cert/key pair is needed, and the certificate must carry the SANs
+  # <tenant>-cert.<domain> and <tenant>-amsso.<domain>.
+  cert_proxy:
+    enabled: false
+    # source: input/certs/certproxy.pfx
+    # format: pfx
+    # password_from: prompt
+
+tenant:
+  # The first tenant, created in the final phase. The reset link printed at the
+  # end expires after 24 hours.
+  admin_user_name: admin
+  admin_email: admin@lab.example.io
+  admin_first_name: Cluster
+  admin_last_name: Admin
+
+smtp:
+  enabled: false
+  # host: smtp.lab.example.io
+  # port: 587
+  # user: ws1access@lab.example.io
+  # security_type: STARTTLS   # STARTTLS | SSL_TLS
+  # password_from: prompt

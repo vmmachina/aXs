@@ -1,0 +1,48 @@
+[project]
+name = "ws1access"
+version = "1.0.0"
+description = "Guided deployment tool for Omnissa Access 26.07 (Control Plane architecture)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Stefan Gourguis" }]
+keywords = ["omnissa", "workspace-one", "access", "deployment", "vmware", "nomad"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Installation/Setup",
+]
+
+# Pure-Python dependencies only -- no compiled extensions.
+# This keeps installs working on macOS (arm64/Intel), Linux (x86_64/aarch64),
+# musl-based distros, and fully offline environments, since every wheel is
+# py3-none-any. SSH and certificate inspection are delegated to the system
+# `ssh`/`scp`/`openssl` binaries instead of paramiko/cryptography.
+dependencies = [
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "rich>=13.0",
+    # Full terminal-UI framework for the guided `configure` wizard (sidebar of
+    # sections, form fields, live panels). Pure Python, wheels are py3-none-any.
+    "textual>=0.60",
+    "pyvmomi>=8.0",
+    # Queries the cluster's own DNS servers rather than the operator's system
+    # resolver -- split-horizon DNS makes those disagree, and the difference is
+    # exactly what breaks a deployment hours later. Also pure Python.
+    "dnspython>=2.4",
+]
+
+[project.scripts]
+axs = "ws1access.cli:main"
+ws1access = "ws1access.cli:main"   # legacy alias
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ws1access"]

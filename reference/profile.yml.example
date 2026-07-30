@@ -1,0 +1,108 @@
+# Verbatim `profile.yml` as created by `wso access init` (Access 26.07, lab
+# 2026-07-28). Captured so aXs never has to guess a field name -- same role as
+# cp-cluster.ini.example.
+#
+# The first four keys are filled in by `wso access init` from its own arguments.
+# aXs must NOT touch them. Everything below is commented out by default, which
+# is why `wso cp precheck` reports "logging/telemetry/nfs/ntp is not set" on a
+# fresh cluster -- and why a deployment without them is perfectly regular.
+#
+# WHAT `wso cp deploy` ITSELF SAYS about the two most important entries. These
+# are the first two lines it prints (lab, cp-deploy.log 2026-07-26 18:51:36) --
+# verbatim, because the wording decides how aXs should present them:
+#
+#   !!!WARNING!!! NTP server is not set in the profile. For production
+#                 deployments, NTP server is highly recommended to prevent
+#                 time drift.
+#   !!!WARNING!!! NFS configuration is not present in the profile. For
+#                 production deployments, NFS is required for disaster
+#                 recovery.
+#
+# Note the asymmetry: NTP is "highly recommended", NFS is "REQUIRED for
+# disaster recovery". Neither blocks the deploy -- the lab ran green without
+# both -- but a production cluster without NFS has no DR path, by the vendor's
+# own words. Do not present these two as equal.
+#
+# THREE MORE THINGS WORTH KNOWING, from the file's own comments:
+#
+#   1. Logging cannot be changed later without cost: "Updating the logging
+#      configuration after first deployment would require a full
+#      redeployment/upgrade of the cluster to take effect." So it is optional,
+#      but it is a decision that belongs BEFORE the first deploy.
+#   2. nfs_path carries a LEADING COLON in the vendor's own example
+#      (":/controlplanenfs/us04pA"). DO NOT COPY IT. Tested 2026-07-28: wso
+#      hands docker's local volume driver device=":<nfs_path>" with
+#      o=addr=<nfs_host>, so the colon is doubled and the mount asks for an
+#      export that does not exist. Phase 70 then dies within seconds on
+#      "permission denied" -- not a warning, an immediate abort. Write the
+#      path plainly: "/controlplanenfs/us04pA".
+#   3. The deploy already runs with deployment_type=Production and a fixed
+#      backup_path=/backup_path (seen in every ansible-playbook invocation in
+#      control_plane.log). So "production" is not a mode you switch on -- it is
+#      what the cluster already is; only the NFS target is missing.
+#
+# Note also: precheck complains that "telemetry configuration is not set", but
+# this template has NO telemetry section at all -- where that is configured is
+# still unknown.
+
+######################## Workspace ONE CLI Configuration ############################
+cluster_name: cp-cluster
+datacenter_name: cp-cluster-dc
+
+# Provide deployment size for the cluster. Possible values are [ micro, xx-small, x-small, small, medium, large ]. Default value is small
+deployment_size: small
+
+product: access
+
+# Uncomment and provide NTP server to configure for time synchronization on the cluster nodes
+#ntp_server: us.pool.ntp.org
+#nfs_host: 10.133.4.160
+#nfs_path: :/controlplanenfs/us04pA
+#nfs_version: 4
+
+# Uncomment and provide a custom Nomad bridge network subnet in CIDR notation (e.g. 10.10.0.0/24)
+#bridge_network_subnet:
+
+# -------------------------------- Log settings -----------------------------------------------------------------------
+# Logging section allows configuring all services to send logs to a central logging server.
+# Updating the logging configuration after first deployment would require a full redeployment/upgrade of the cluster to take effect.
+#
+# What to update (uncomment `logging:` first, then only the backends you need):
+#
+# Loki — under logging.loki_server:
+#   - url:          Loki base / push URL
+#   - username:     basic auth user (if required)
+#   - password:     basic auth password (if required)
+#
+# Syslog — under logging.syslog_servers (maximum two list entries):
+#   - host:         syslog server hostname or IP
+#   - protocol:     udp, tcp, or tls
+#   - port:         e.g. 514 (udp/tcp) or 6514 (common for TLS)
+
+# Logging directory is also created where certs in PEM format can be provided for TLS/Mutual Auth.
+# (Optional) Add syslog cacert for TLS by the name of cacert.pem in logging directory.
+# (Optional) Add client cert for Mutual Auth by the name of client-cert.pem in logging directory.
+# (Optional) Add client key for Mutual Auth by the name of client-key.pem in logging directory.
+
+# OpenSearch — under logging.opensearch:
+#   - url:          full HTTPS URL to the OpenSearch API (e.g. https://search.example.com:9200)
+#   - username:     OpenSearch user
+#   - password:     OpenSearch password
+#   - index_prefix: Opensearch index prefix
+#   Add opensearch cacert for TLS by the name of cacert.pem in logging directory.
+
+#logging:
+#  loki_server:
+#    url:
+#    username:
+#    password:
+#  opensearch:
+#    url:
+#    username:
+#    password:
+#    index_prefix:
+#  syslog_servers:
+#    - host:
+#      protocol: udp
+#      port: 514
+#  syslog_cert_passphrase:   # only if your syslog client key in the logging directory is passphrase-protected

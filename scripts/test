@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Run the test suite. Stdlib unittest only -- see tests/README.md for why.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Not a preference: ws1access lives under src/ and is only importable from the
+# venv's editable install. Falling back to a bare python3 would produce 105
+# ImportErrors instead of one sentence saying what is actually wrong.
+if [ ! -x .venv/bin/python ]; then
+    echo "No .venv found. Run scripts/setup.sh first." >&2
+    exit 1
+fi
+
+exec .venv/bin/python -m unittest discover -s tests -t . "$@"

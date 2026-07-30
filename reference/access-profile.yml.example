@@ -1,0 +1,50 @@
+# REAL working access-profile.yml from the lab. This is the target the
+# generator produces in phase 70. Confirms several design points:
+#
+#   - is_self_signed: true  -> TLS terminates at the LB, the appliance runs
+#     self-signed internally, the real cert lives only on HAProxy. custom_cert_*
+#     are empty. (The "terminate/re-encrypt" topology.)
+#   - cert_proxy.enabled: false + ssl_certificate_type: FQDN_CERT -> no second
+#     cert/key pair.
+#   - ip_ignore_list_for_xff_header here is LB IP + the two ACCESS node IPs. A
+#     by-the-book primary deploy produced this and it works. The tool generates
+#     LB + all non-bootstrap nodes + reverse proxies (harmless static superset,
+#     satisfies the doc prose). The nomad subnet 172.26.64.0/20 is added ONLY for
+#     a DR / secondary cluster, which is the only place the guide requires it.
+#     See docs/04-findings.md.
+#   - tenant_name comment on the REAL appliance says "[Optional] tenant_name is
+#     not mandatory", which differs from the PDF ("mandatory"). The admin_* fields
+#     are mandatory.
+
+fqdn:
+  name: lab.vmguru.io          # the DOMAIN, not the tenant URL
+  port: 443
+  ip: 10.10.50.133             # the load balancer IP; access.lab.vmguru.io resolves here
+
+server_certificate:
+  is_self_signed: true         # cert lives on the LB, not here
+  custom_cert_file:
+  custom_cert_keyfile:
+
+first_tenant:
+  tenant_name: access          # "[Optional]" per the appliance; admin_* are mandatory
+  admin_user_name: admin
+  admin_email: <REDACTED>
+  admin_first_name: Stefan
+  admin_last_name: <REDACTED>
+
+cert_proxy:
+  enabled: false
+  ssl_certificate_type: FQDN_CERT    # reuses the FQDN cert; no second pair
+  ssl_certificate_path:
+  ssl_certificate_key:
+
+# LB IP + the two access node IPs. Nothing else was needed.
+ip_ignore_list_for_xff_header: ["10.10.50.133", "10.10.50.11", "10.10.50.12"]
+
+smtp:
+  enabled: false
+  host:
+  port: 587
+  user:
+  security_type:

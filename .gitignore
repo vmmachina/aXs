@@ -1,0 +1,30 @@
+# Large, licensed or environment-specific artefacts the user drops in.
+input/ova/*
+input/assets/*
+input/certs/*
+input/ovftool/*
+!input/**/.gitkeep
+
+# Per-deployment working directories: config, logs, generated files, secrets.
+clusters/*
+!clusters/.gitkeep
+
+# vendor/ is reserved (currently unused): setup fetches everything online via uv.
+vendor/*
+!vendor/.gitkeep
+
+# venv created by scripts/setup.sh (uv fetches Python + deps into it).
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Internal marketing/blog drafts and the release-notes source (kept local: work
+# in progress, and the source may carry third-party copyright).
+marketing/
+
+
+# Verbatim vendor OVF descriptor -- kept for provenance only, not read at
+# runtime (the tool uses the derived ova_profiles/26.07.yml). Third-party
+# copyright, so it stays local.
+*.ovf.reference

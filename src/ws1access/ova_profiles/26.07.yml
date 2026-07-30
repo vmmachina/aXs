@@ -1,0 +1,236 @@
+# OVF profile for the Omnissa Access OVA.
+#
+# Read directly from the OVA's own descriptor (access.ovf), not inferred.
+# Preflight re-reads the descriptor from the OVA the user supplies and warns on
+# any disagreement with this file, so a change in a future release surfaces
+# before the deploy rather than during it.
+#
+# One OVA serves every role and size; the role+size is chosen purely by
+# `--deploymentOption`.
+
+# Signature: RESOLVED against ovftool 4.6.3.
+#
+# The OVA is signed by Omnissa, LLC via a DigiCert code-signing CA that is not in
+# ovftool's bundled trust store. ovftool reports
+#   "Source is signed but could not verify certificate (possibly self-signed)"
+# but treats it as informational: no prompt, exit code 0. Phase 10 can therefore
+# run unattended without any signature-related flag.
+#
+# Important nuance for the user-facing message: --machineOutput reports
+#   <ManifestValidate valid="true"/>
+# so the OVA itself is intact -- only the publisher's certificate chain cannot be
+# verified. Say that, rather than "certificate not trusted", which sounds like a
+# corrupted download.
+#
+# Preflight reads the OVA with `ovftool --machineOutput <ova>` and parses the
+# <probeResult> XML (strip the leading "+ " from each line) rather than scraping
+# the human-readable output.
+signature:
+  verifiable: false
+  manifest_valid: true
+  blocks_automation: false
+  ovftool_tested: "4.6.3 (build-24031167)"
+
+release: "26.07"                  # Omnissa Access release
+ova_product: WS1Access
+ova_version: "9.6"                # the OVA's own product version, NOT the release
+ova_full_version: "9.6 Build 394"
+vendor: Omnissa
+base_image: alma-minimal-9.6-394  # AlmaLinux 9.6 -- the same distro to use for the LB
+ovf_transport: com.vmware.guestInfo
+
+# --- deployment options -----------------------------------------------------
+# The ovf:id values from DeploymentOptionSection. Selected with
+# `ovftool --deploymentOption=<id>`; this ALSO sets the deploymentProfile
+# property automatically (see properties_not_configurable below).
+deployment_options:
+  bootstrap: bootstrap
+  platform:
+    small: infra-small
+    medium: infra-medium
+    large: infra-large
+  access:
+    small: access-small
+    medium: access-medium
+    large: access-large
+
+# --- hardware per deployment option ------------------------------------------
+# From the VirtualHardwareSection. CPU and RAM match the install guide exactly.
+# Disk does NOT -- see disk_shortfall below.
+hardware:
+  bootstrap:    {vcpu: 8,  ram_mb: 32768, disk_gb: 200}
+  infra-small:  {vcpu: 16, ram_mb: 49152, disk_gb: 200}
+  infra-medium: {vcpu: 24, ram_mb: 98304, disk_gb: 200}
+  infra-large:  {vcpu: 24, ram_mb: 98304, disk_gb: 200}
+  access-small: {vcpu: 24, ram_mb: 49152, disk_gb: 200}
+  access-medium: {vcpu: 48, ram_mb: 65536, disk_gb: 200}
+  access-large: {vcpu: 64, ram_mb: 98304, disk_gb: 200}
+
+# The OVA ships a single 200 GB disk for every configuration, but the install
+# guide requires more for medium and large infrastructure nodes. The disk must
+# be expanded after deployment; the OVA cannot do it.
+#
+# Note also that infra-medium and infra-large are identical in CPU and RAM --
+# the only intended difference between them is disk. Without expansion, a large
+# deployment is effectively a medium one.
+disk_shortfall:
+  infra-medium: {required_gb: 300, provided_gb: 200}
+  infra-large:  {required_gb: 400, provided_gb: 200}
+
+# --- network ----------------------------------------------------------------
+# A single logical network, one VmxNet3 adapter, present in every configuration.
+# Mapped with `ovftool --net:Internet=<portgroup>`.
+network:
+  name: Internet
+  adapter: VmxNet3
+
+# --- properties the tool sets -----------------------------------------------
+# Exactly the nine with ovf:userConfigurable="true" -- the wizard's
+# "Networking: 7 settings" plus "Password Options: 2 settings".
+# These become `--prop:<key>=<value>` on the ovftool command line.
+properties:
+  hostname:     hostname          # short name, not FQDN (e.g. wsa-boot-01)
+  ip:           ip0               # NIC 1 (eth0) IPv4 address
+  netmask:      netmask0          # NIC 1 (eth0) IPv4 netmask
+  gateway:      defaultGateway    # IPv4 default gateway
+  dns:          DNS               # SPACE separated: "192.0.2.1 192.0.2.2"
+  dns_search:   dnsSearch         # SPACE separated list: "example1.com example2.com"
+  docker_cidr:  docker0Cidr       # optional -- see constraints
+
+  root_password:       rootPassword
+  configuser_password: configuserPassword
+
+# --- properties the tool must NOT set ---------------------------------------
+# All have ovf:userConfigurable="false". Passing them via --prop: is rejected
+# by ovftool.
+properties_not_configurable:
+  deploymentProfile:
+    # Derived automatically from the selected deployment option -- the descriptor
+    # carries an <ovf:Value ovf:configuration="X" ovf:value="X"/> for each one.
+    # So the role+size is expressed ONCE, via --deploymentOption, and cannot
+    # disagree with itself.
+    set_via: --deploymentOption
+  vm.vmname:
+    # Fixed to "ws1-access" in the descriptor. The VM's actual name comes from
+    # ovftool's --name argument, not from a property.
+    set_via: --name
+  buildNumber: {value: "394", note: informational}
+  additionalDeploymentMetadata: {value: "", note: informational}
+
+# --- constraints the dialog enforces up front -------------------------------
+constraints:
+  # Identical for both accounts. The descriptor declares ovf:qualifiers="MinLen(15)";
+  # the remaining rules come from the property description and are enforced while
+  # the user types rather than discovered when vSphere rejects the deploy.
+  password_policy: &password_policy
+    min_length: 15
+    require_digit: true         # at least one 0-9
+    require_uppercase: true     # at least one A-Z
+    require_special: true       # at least one special character
+  root_password: *password_policy
+  configuser_password:
+    <<: *password_policy
+    same_on_all_nodes: true
+    expires_days: 60            # from the OVA deployment date
+
+  dns:
+    separator: " "
+    format: ipv4
+  dns_search:
+    separator: " "              # a list -- multiple search domains allowed
+  hostname:
+    fqdn_from: dns_search       # forward AND reverse DNS checked during preflight
+  docker_cidr:
+    # OMITTED ALWAYS. Verified on a running cluster (2026-07-21): all three
+    # nodes carry docker0 = 172.17.0.1/16 regardless of what the property held
+    # at deploy time -- one node had the literal string "stefan", another had it
+    # empty. The appliance ignores the value and uses its default, so setting it
+    # buys nothing and can only introduce a failure.
+    optional: true
+    format: cidr
+    appliance_default: 172.17.0.1/16
+    verified_ignored: true
+
+# --- verification, phase 20 -------------------------------------------------
+# How to check that the OVF properties actually applied. All of this was
+# established against a running cluster; none of it is in the documentation.
+verification:
+  interface:
+    # NOT eth0. The property label says "NIC 1 (eth0)" but the interface is
+    # actually ens160. Never hardcode the name -- resolve it from the default
+    # route, which is stable across naming schemes.
+    discover_via: "ip route | grep '^default'"
+    observed: ens160
+    do_not_hardcode: eth0
+
+  dns:
+    # resolv.conf is NOT comparable across roles. The bootstrap node lists the
+    # real server (nameserver 10.10.80.1); platform and access nodes list the
+    # systemd-resolved stub (nameserver 127.0.0.53). Comparing the configured
+    # DNS server against resolv.conf raises a false alarm on most of the cluster.
+    use: resolvectl
+    do_not_compare: /etc/resolv.conf
+    stub_resolver: 127.0.0.53
+
+  commands:
+    hostname: "hostname -f"
+    addresses: "ip -4 -br addr show"
+    gateway: "ip route | grep '^default'"
+
+# --- internal networks that must not collide --------------------------------
+# Internal networks observed on a running cluster. Neither is mentioned in the
+# installation guide.
+#
+# WARN, DO NOT BLOCK. What actually happens when the node subnet overlaps one of
+# these has not been established -- it may be fatal, it may be harmless, and the
+# nomad range may not even be fixed. Aborting a deployment on an untested theory
+# would be worse than the risk it guards against. So preflight reports the
+# overlap, says plainly that the consequence is unverified, and lets the operator
+# decide.
+#
+# The check is worth running regardless: it costs nothing, and if a deployment
+# later fails in an unexplained way, the warning is the first thing to revisit.
+reserved_networks:
+  - cidr: 172.17.0.0/16
+    used_by: docker0
+    exists_from: ova_deploy
+    on_roles: [bootstrap, platform, access]
+  - cidr: 172.26.64.0/20
+    used_by: nomad
+    exists_from: cp_deploy      # ASSUMED -- see open_questions below
+    on_roles: [platform, access]
+    verified: false
+
+# --- to establish during the next clean deployment --------------------------
+# Observed on an already-running cluster, so cause and timing are inferred
+# rather than known. Each of these changes what the tool should do, so none may
+# be treated as settled until seen on a fresh deployment.
+open_questions:
+  nomad_bridge:
+    question: >
+      When exactly does the nomad bridge appear, is 172.26.64.0/20 fixed or
+      derived, and does it exist on all roles or only platform and access?
+    why_it_matters: >
+      Also unknown is what a collision actually causes -- that has never been
+      observed, only assumed. Establish the consequence before deciding whether
+      preflight should warn, offer to move the range, or refuse outright.
+    how_to_check: >
+      On a freshly deployed node, record `ip -4 -br addr show` before
+      `wso cp deploy`, again after it, and on each role.
+
+  disk_expansion:
+    question: >
+      Do infra-medium and infra-large actually need the 300/400 GB from the
+      guide, given the OVA ships 200 GB for every option?
+    why_it_matters: >
+      Determines whether phase 10 must grow the disk after deployment or merely
+      warn. Note infra-medium and infra-large are identical in CPU and RAM, so
+      disk is the only thing separating them.
+
+  ovftool_existing_vm:
+    question: >
+      How does ovftool behave when the target VM name already exists -- error,
+      or silent second VM?
+    why_it_matters: >
+      Phase 10 probes vCenter first and skips existing nodes, but the failure
+      mode must be known for the case where the probe and the deploy race.
